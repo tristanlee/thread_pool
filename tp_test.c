@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include "thread_pool.h"
 
-#define THD_NUM 10 
+#define THD_NUM 100 
 
 static pthread_mutex_t lock;
 static unsigned exit_cnt;
@@ -29,20 +29,20 @@ void proc_fun(void *arg){
 }
 
 int main(int argc, char **argv){
-	pTp= tp_create(5, THD_NUM);
+	pTp= tp_create(10, THD_NUM);
 	int i;
 
 	exit_cnt = 0;
 	pthread_mutex_init(&lock, NULL);
 	srand((int)time(0));
 	for(i=0; i < THD_NUM; i++){
-		tp_process_job(pTp, proc_fun, i);
+		tp_process_job(pTp, (process_job)proc_fun, (void*)i);
 	}
 	//tp_run(pTp);
 	//free(pTp);
 	//fprintf(stderr, "All jobs done!\n");
 
-	sleep(20);
+	sleep(30);
 	printf("timeout, tp_close() %d\n", exit_cnt);
 	tp_close(pTp, 1);
 	fprintf(stderr, "%d jobs done!\n", exit_cnt);

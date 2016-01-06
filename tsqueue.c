@@ -76,6 +76,39 @@ int ts_queue_enq_data(TSQueue *cq, void *data){
 	return 0;
 }
 
+void *ts_queue_rm_data(TSQueue *cq, void *data){
+    TSQItem **p;
+    TSQItem *item = NULL;
+    TSQItem *prev = NULL;
+
+	if(!cq || !data)
+		return NULL;
+    
+    pthread_mutex_lock(&cq->lock);
+    p = &cq->head;
+    while (*p) {
+        if ((*p)->data == data) {
+            //data found
+            item = *p;
+            *p = item->next; //remove item from queue
+            item->next = NULL;
+            if (item == cq->tail) cq->tail = prev;
+            cq->count--;
+            break;                
+        }
+        prev = *p;
+        p = &(*p)->next;
+    }
+    pthread_mutex_unlock(&cq->lock);
+    
+    if (item) {
+        free(item);
+        return data;
+    }
+
+    return NULL;
+}
+
 unsigned ts_queue_count(TSQueue *cq){
     unsigned count = 0;
 

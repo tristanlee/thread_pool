@@ -31,7 +31,7 @@
 #endif
 
 #define BUSY_THRESHOLD 0.5	//(busy thread)/(all thread threshold)
-#define MANAGE_INTERVAL 15	//tp manage thread sleep interval, every MANAGE_INTERVAL seconds, manager thread will try to recover idle threads as BUSY_THRESHOLD
+#define MANAGE_INTERVAL 20	//tp manage thread sleep interval, every MANAGE_INTERVAL seconds, manager thread will try to recover idle threads as BUSY_THRESHOLD
 
 typedef struct tp_thread_info_s TpThreadInfo;
 typedef struct tp_thread_pool_s TpThreadPool;
@@ -53,14 +53,13 @@ struct tp_thread_info_s {
 //main thread pool struct
 struct tp_thread_pool_s {
 	unsigned min_th_num; //min thread number in the pool
-	unsigned cur_th_num; //current thread number in the pool
 	unsigned max_th_num; //max thread number in the pool
 	pthread_mutex_t tp_lock;
 	pthread_cond_t tp_cond;
 	pthread_mutex_t loop_lock;
 	pthread_cond_t loop_cond;
 	
-	TpThreadInfo *thread_info;
+    TSQueue *busy_q; //busy queue
 	TSQueue *idle_q; //idle queue
 	BOOL stop_flag; //whether stop the threading pool
 	

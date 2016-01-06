@@ -46,18 +46,11 @@ TpThreadPool *tp_create(unsigned min_num, unsigned max_num) {
 
 	//init member var
 	pTp->min_th_num = min_num;
-	pTp->cur_th_num = min_num;
 	pTp->max_th_num = max_num;
 	pthread_mutex_init(&pTp->tp_lock, NULL);
 	pthread_cond_init(&pTp->tp_cond, NULL);
 	pthread_mutex_init(&pTp->loop_lock, NULL);
 	pthread_cond_init(&pTp->loop_cond, NULL);
-
-	//malloc mem for num thread info struct
-	if (NULL != pTp->thread_info)
-		free(pTp->thread_info);
-	pTp->thread_info = (TpThreadInfo*) malloc(sizeof(TpThreadInfo) * pTp->max_th_num);
-	memset(pTp->thread_info, 0, sizeof(TpThreadInfo) * pTp->max_th_num);
 
     tp_init(pTp);
 	return pTp;
@@ -76,6 +69,7 @@ static int tp_init(TpThreadPool *pTp) {
 	TpThreadInfo *pThi;
 
 	//init_queue(&pTp->idle_q, NULL);
+	pTp->busy_q = ts_queue_create();
 	pTp->idle_q = ts_queue_create();
 	pTp->stop_flag = FALSE;
 	pTp->busy_threshold = BUSY_THRESHOLD;
@@ -83,7 +77,7 @@ static int tp_init(TpThreadPool *pTp) {
 
 	//create work thread and init work thread info
 	for (i = 0; i < pTp->min_th_num; i++) {
-		pThi = pTp->thread_info + i;
+        pThi = (TpThreadInfo*) malloc(sizeof(TpThreadInfo));
 		pThi->tp_pool = pTp;
 		pThi->is_busy = FALSE;
 		pthread_cond_init(&pThi->event_cond, NULL);
@@ -96,7 +90,8 @@ static int tp_init(TpThreadPool *pTp) {
 		err = pthread_create(&pThi->thread_id, NULL, tp_work_thread, pThi);
 		if (0 != err) {
 			perror("tp_init: create work thread failed.");
-			ts_queue_destroy(pTp->idle_q);
+			ts_queue_destroy(pTp->busy_q);
+            ts_queue_destroy(pTp->idle_q);
 			return -1;
 		}
 	}
@@ -104,6 +99,7 @@ static int tp_init(TpThreadPool *pTp) {
 	//create manage thread
 	err = pthread_create(&pTp->manage_thread_id, NULL, tp_manage_thread, pTp);
 	if (0 != err) {//clear_queue(&pTp->idle_q);
+	    ts_queue_destroy(pTp->busy_q);
 		ts_queue_destroy(pTp->idle_q);
 		fprintf(stderr, "tp_init: creat manage thread failed\n");
 		return 0;
@@ -155,39 +151,67 @@ void tp_exit(TpThreadPool *pTp){
  */
 void tp_close(TpThreadPool *pTp, BOOL wait) {
 	unsigned i;
-
+    TpThreadInfo *pThi;
+    
 	pTp->stop_flag = TRUE;
 
 	//close manage thread first
 	kill((pid_t)pTp->manage_thread_id, SIGKILL);
 
 	if (wait) {
-		DEBUG("current number of threads: %u", pTp->cur_th_num);
-        printf("current number of threads: %u\n", pTp->cur_th_num);
-		for (i = 0; i < pTp->cur_th_num; i++) {
-            pthread_mutex_lock(&pTp->thread_info[i].event_lock);
-            pTp->thread_info[i].event = TRUE;
-			pthread_cond_signal(&pTp->thread_info[i].event_cond);
-            pthread_mutex_unlock(&pTp->thread_info[i].event_lock);
-            printf("pthread_cond_signal() job %u\n", (unsigned)pTp->thread_info[i].arg);
-		}
-		for (i = 0; i < pTp->cur_th_num; i++) {
-			printf("join thread_id 0x%08x, job_id %u\n", pTp->thread_info[i].thread_id,(unsigned)pTp->thread_info[i].arg);
-			if(0 != pthread_join(pTp->thread_info[i].thread_id, NULL)){
+        DEBUG("Total number of threads: %u\n", ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q));
+        while (!ts_queue_is_empty(pTp->busy_q)) {
+            pThi = ts_queue_deq_data(pTp->busy_q);
+            pthread_mutex_lock(&pThi->event_lock);
+            pThi->event = TRUE;
+			pthread_cond_signal(&pThi->event_cond);
+            pthread_mutex_unlock(&pThi->event_lock);
+
+            DEBUG("join thread 0x%08x\n", (unsigned)pThi->thread_id);
+			if(0 != pthread_join(pThi->thread_id, NULL)){
 				perror("pthread_join");
 			}
 			//DEBUG("join a thread success.\n");
-			pthread_mutex_destroy(&pTp->thread_info[i].event_lock);
-			pthread_cond_destroy(&pTp->thread_info[i].event_cond);
-		}
-		printf("join all thread success.\n");
+			pthread_mutex_destroy(&pThi->event_lock);
+			pthread_cond_destroy(&pThi->event_cond);
+            free(pThi);
+        }
+
+        while (!ts_queue_is_empty(pTp->idle_q)) {
+            pThi = ts_queue_deq_data(pTp->idle_q);
+            pthread_mutex_lock(&pThi->event_lock);
+            pThi->event = TRUE;
+			pthread_cond_signal(&pThi->event_cond);
+            pthread_mutex_unlock(&pThi->event_lock);
+
+            DEBUG("join thread 0x%08x\n", (unsigned)pThi->thread_id);
+			if(0 != pthread_join(pThi->thread_id, NULL)){
+				perror("pthread_join");
+			}
+			//DEBUG("join a thread success.\n");
+			pthread_mutex_destroy(&pThi->event_lock);
+			pthread_cond_destroy(&pThi->event_cond);
+            free(pThi);
+        }
+
+        DEBUG("join all thread success.\n");
 	} else {
 		//close work thread
-		for (i = 0; i < pTp->cur_th_num; i++) {
-			kill((pid_t)pTp->thread_info[i].thread_id, SIGKILL);
-			pthread_mutex_destroy(&pTp->thread_info[i].event_lock);
-			pthread_cond_destroy(&pTp->thread_info[i].event_cond);
-		}
+		while (!ts_queue_is_empty(pTp->busy_q)) {
+            pThi = ts_queue_deq_data(pTp->busy_q);
+            kill((pid_t)pThi->thread_id, SIGKILL);
+			pthread_mutex_destroy(&pThi->event_lock);
+			pthread_cond_destroy(&pThi->event_cond);
+            free(pThi);
+        }
+        
+        while (!ts_queue_is_empty(pTp->idle_q)) {
+            pThi = ts_queue_deq_data(pTp->idle_q);
+            kill((pid_t)pThi->thread_id, SIGKILL);
+			pthread_mutex_destroy(&pThi->event_lock);
+			pthread_cond_destroy(&pThi->event_cond);
+            free(pThi);
+        }
 	}
 
 	pthread_mutex_destroy(&pTp->tp_lock);
@@ -196,10 +220,8 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
 	pthread_cond_destroy(&pTp->loop_cond);
 
 	//clear_queue(&pTp->idle_q);
+	ts_queue_destroy(pTp->busy_q);
 	ts_queue_destroy(pTp->idle_q);
-	//free thread struct
-	free(pTp->thread_info);
-	pTp->thread_info = NULL;
     free(pTp);
 }
 
@@ -214,16 +236,19 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
  */
 int tp_process_job(TpThreadPool *pTp, process_job proc_fun, void *arg) {
 	TpThreadInfo *pThi ;
-	//fill pTp->thread_info's relative work key
+
+    if (!pTp || pTp->stop_flag) return -1;
+    
 	pThi = (TpThreadInfo *) ts_queue_deq_data(pTp->idle_q);
 	if(pThi){
 		DEBUG("Fetch a thread from pool.\n");
 		pThi->is_busy = TRUE;
 		pThi->proc_fun = proc_fun;
 		pThi->arg = arg;
+        ts_queue_enq_data(pTp->busy_q, pThi);
         
 		//let the thread to deal with this job
-		DEBUG("wake up thread %u\n", pThi->thread_id);
+		DEBUG("wake up thread %u\n", (unsigned)pThi->thread_id);
         pthread_mutex_lock(&pThi->event_lock);
         pThi->event = TRUE;
 		pthread_cond_signal(&pThi->event_cond);
@@ -240,7 +265,7 @@ int tp_process_job(TpThreadPool *pTp, process_job proc_fun, void *arg) {
 		//pthread_cond_wait(&pTp->tp_cond, &pTp->tp_lock);
 		//pthread_mutex_unlock(&pTp->tp_lock);
 		
-		DEBUG("No more idle thread, a new thread is created.\n");
+		DEBUG("No more idle thread, create a new thread\n");
 	}
 	return 0;
 }
@@ -258,16 +283,12 @@ static TpThreadInfo *tp_add_thread(TpThreadPool *pTp, process_job proc_fun, void
 	int err;
 	TpThreadInfo *new_thread;
 
-	pthread_mutex_lock(&pTp->tp_lock);
-	if (pTp->max_th_num <= pTp->cur_th_num){
-		pthread_mutex_unlock(&pTp->tp_lock);
+	if (pTp->max_th_num <= ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q)){
 		return NULL;
 	}
-
+    
 	//malloc new thread info struct
-	new_thread = pTp->thread_info + pTp->cur_th_num; 
-	pTp->cur_th_num++;
-	pthread_mutex_unlock(&pTp->tp_lock);
+	new_thread = (TpThreadInfo*) malloc(sizeof(TpThreadInfo));
 
 	new_thread->tp_pool = pTp;
 	//init new thread's cond & mutex
@@ -279,10 +300,14 @@ static TpThreadInfo *tp_add_thread(TpThreadPool *pTp, process_job proc_fun, void
 	new_thread->event = TRUE;
 	new_thread->proc_fun = proc_fun;
 	new_thread->arg = arg;
+    ts_queue_enq_data(pTp->busy_q, new_thread);
 
 	err = pthread_create(&new_thread->thread_id, NULL, tp_work_thread, new_thread);
 	if (0 != err) {
 		perror("tp_add_thread: pthread_create");
+        ts_queue_rm_data(pTp->busy_q, new_thread);
+        pthread_mutex_destroy(&new_thread->event_lock);
+	    pthread_cond_destroy(&new_thread->event_cond);
 		free(new_thread);
 		return NULL;
 	}
@@ -303,28 +328,19 @@ int tp_delete_thread(TpThreadPool *pTp) {
 	TpThreadInfo tT;
 
 	//current thread num can't < min thread num
-	if (pTp->cur_th_num <= pTp->min_th_num)
+	if (ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q) <= pTp->min_th_num)
 		return -1;
 	//all threads are busy
 	pThi = (TpThreadInfo *) ts_queue_deq_data(pTp->idle_q);
 	if(!pThi)
 		return -1;
 	
-	//after deleting idle thread, current thread num -1
-	pthread_mutex_lock(&pTp->tp_lock);
-	pTp->cur_th_num--;
-	/** swap this thread to the end, and free it! **/
-	memcpy(&tT, pThi, sizeof(TpThreadInfo));
-	memcpy(pThi, pTp->thread_info + pTp->cur_th_num, sizeof(TpThreadInfo));
-	memcpy(pTp->thread_info + pTp->cur_th_num, &tT, sizeof(TpThreadInfo));
-	pthread_mutex_unlock(&pTp->tp_lock);
-
-    printf("tp_delete_thread() job %u, tId 0x%08x, swap job %u, tId 0x%08x\n", \
-        (unsigned)tT.arg, (unsigned)tT.thread_id, (unsigned)pThi->arg, (unsigned)pThi->thread_id);
-	//kill the idle thread and free info struct
-	kill((pid_t)tT.thread_id, SIGKILL);
-	pthread_mutex_destroy(&tT.event_lock);
-	pthread_cond_destroy(&tT.event_cond);
+    DEBUG("Delete idle thread 0x%08x\n", (unsigned)pThi->thread_id);
+    //kill the idle thread and free info struct
+    kill((pid_t)pThi->thread_id, SIGKILL);
+    pthread_mutex_destroy(&pThi->event_lock);
+    pthread_cond_destroy(&pThi->event_cond);
+    free(pThi);
 
 	return 0;
 }
@@ -347,34 +363,34 @@ static void *tp_work_thread(void *arg) {
 
     while (!(pTp->stop_flag)) {
 		//wait cond for processing real job.
-		DEBUG("thread %u is waiting for a job\n", pTinfo->thread_id);
-        printf("job %u is waiting for a job\n", (unsigned)pTinfo->arg);
+        DEBUG("thread 0x%08x is waiting for event\n", (unsigned)pTinfo->thread_id);
 		pthread_mutex_lock(&pTinfo->event_lock);
 		while (!pTinfo->event) pthread_cond_wait(&pTinfo->event_cond, &pTinfo->event_lock);
         //reset event flag
         pTinfo->event = FALSE;
 		pthread_mutex_unlock(&pTinfo->event_lock);
-		DEBUG("thread %u end waiting for a job\n", pTinfo->thread_id);
-        printf("job %u end waiting for a job\n", (unsigned)pTinfo->arg);
+        DEBUG("thread 0x%08x get event\n", (unsigned)pTinfo->thread_id);
 
 		if(pTp->stop_flag){
-			DEBUG("thread %u stop\n", pTinfo->thread_id);
+			DEBUG("thread 0x%08x stop\n", (unsigned)pTinfo->thread_id);
 			break;
 		}
                 
 		//process
 		if(pTinfo->proc_fun){
-			DEBUG("thread %u is running\n", pTinfo->thread_id);
+			DEBUG("thread 0x%08x is running\n", (unsigned)pTinfo->thread_id);
 			pTinfo->proc_fun(pTinfo->arg);
 			//thread state shoulde be set idle after work
 			pTinfo->is_busy = FALSE;
 			pTinfo->proc_fun = NULL;
+            //pTinfo->arg = NULL;
 			//I am idle now
-			ts_queue_enq_data(pTp->idle_q, pTinfo);
+			if (ts_queue_rm_data(pTp->busy_q, pTinfo) != NULL) {
+			    ts_queue_enq_data(pTp->idle_q, pTinfo);
+			}
 		}
 	}
-	DEBUG("Job done, thread %u exit.\n", pTinfo->thread_id);
-    printf("job %u done, tId 0x%08x exit\n", (unsigned)pTinfo->arg, (unsigned)pTinfo->thread_id);
+    DEBUG("thread 0x%08x exit\n", (unsigned)pTinfo->thread_id);
 }
 
 /**
@@ -386,15 +402,15 @@ static void *tp_work_thread(void *arg) {
  */
 int tp_get_tp_status(TpThreadPool *pTp) {
 	float busy_num = 0.0;
-	int i;
-
+    unsigned total_num = 0;
+    
 	//get busy thread number
-	pthread_mutex_lock(&pTp->tp_lock);
-	busy_num = pTp->cur_th_num - ts_queue_count(pTp->idle_q);
-    busy_num = busy_num / (pTp->cur_th_num);
-    pthread_mutex_unlock(&pTp->tp_lock);
+	busy_num = ts_queue_count(pTp->busy_q);
+    total_num = ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q);
+    busy_num = busy_num / total_num;
 
-	DEBUG("Current thread pool status, current num: %u, busy num: %u, idle num: %u\n", pTp->cur_th_num, (unsigned)busy_num, ts_queue_count(pTp->idle_q));
+	DEBUG("Thread pool status, total num: %u, busy num: %u, idle num: %u\n", \
+        total_num, (unsigned)busy_num, ts_queue_count(pTp->idle_q));
 	if(busy_num < pTp->busy_threshold)
 		return 0;//idle status
 	else
@@ -415,10 +431,7 @@ static void *tp_manage_thread(void *arg) {
 
 	do {
 		if (tp_get_tp_status(pTp) == 0) {
-			do {
-				if (!tp_delete_thread(pTp))
-					break;
-			} while (TRUE);
+            tp_delete_thread(pTp);
 		}//end for if
 
 		//1?

@@ -57,6 +57,7 @@ void ts_queue_destroy(TSQueue *cq);
 
 void *ts_queue_deq_data(TSQueue *cq);
 int ts_queue_enq_data(TSQueue *cq, void *data);
+void *ts_queue_rm_data(TSQueue *cq, void *data);
 
 unsigned ts_queue_count(TSQueue *cq);
 BOOL ts_queue_is_empty(TSQueue *cq);
