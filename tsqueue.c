@@ -21,8 +21,8 @@
 
 
 static void ts_queue_init(TSQueue *cq);
-static TSQItem *ts_queue_item_new(TSQueue *cq);
-static void ts_queue_item_free(TSQueue *cq, TSQItem *item);
+//static TSQItem *ts_queue_item_new(TSQueue *cq);
+//static void ts_queue_item_free(TSQueue *cq, TSQItem *item);
 
 static TSQItem *ts_queue_head(TSQueue *cq);
 static TSQItem *ts_queue_tail(TSQueue *cq);
@@ -133,14 +133,14 @@ static void ts_queue_init(TSQueue *cq){
 }
 
 static TSQItem *ts_queue_head(TSQueue *cq){
-	TSQItem *item;
+	//TSQItem *item;
 	if(!cq)
 		return NULL;
 	return cq->head;
 }
 
 static TSQItem *ts_queue_tail(TSQueue *cq){
-	TSQItem *item;
+	//TSQItem *item;
 	if(!cq)
 		return NULL;
 	return cq->tail;

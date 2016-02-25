@@ -1,10 +1,19 @@
-/*
- * @author: boyce
- * @contact: boyce.ywr#gmail.com (# -> @)
- * @version: 1.02
- * @created: 2011-07-25
- * @modified: 2011-08-04
- * @modified: 2012-05-14
+/**
+ * @file thread_pool.c
+ * @version 1.0
+ * @author boyce <boyce.ywr@gmail.com>
+ * @author Tristan Lee <tristan.lee@qq.com>
+ * @brief A Thread Pool implementation on Pthread
+ * 
+ * 
+ * Change Logs:
+ * Date			Author		Notes
+ * 2011-07-25   boyce
+ * 2011-08-04   boyce
+ * 2012-05-14   boyce
+ * 2016-01-13	Tristan		fix bugs
+ * 2016-02-25	Tristan		fix manage thread exit problem
+ *
  */
 
 #include <stdio.h>
@@ -64,8 +73,8 @@ TpThreadPool *tp_create(unsigned min_num, unsigned max_num) {
  * 	true: successful; false: failed
  */
 static int tp_init(TpThreadPool *pTp) {
-	int i;
 	int err;
+    unsigned i;
 	TpThreadInfo *pThi;
 
 	//init_queue(&pTp->idle_q, NULL);
@@ -150,18 +159,19 @@ void tp_exit(TpThreadPool *pTp){
  * return:
  */
 void tp_close(TpThreadPool *pTp, BOOL wait) {
-	unsigned i;
     TpThreadInfo *pThi;
     
 	pTp->stop_flag = TRUE;
 
 	//close manage thread first
-	kill((pid_t)pTp->manage_thread_id, SIGKILL);
+    DEBUG("cancel manage thread 0x%08x\n", (unsigned)pTp->manage_thread_id);
+	pthread_cancel(pTp->manage_thread_id);
+	pthread_join(pTp->manage_thread_id, NULL);
 
+    DEBUG("Total number of threads: %d\n", ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q));
 	if (wait) {
-        DEBUG("Total number of threads: %u\n", ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q));
         while (!ts_queue_is_empty(pTp->busy_q)) {
-            pThi = ts_queue_deq_data(pTp->busy_q);
+            pThi = (TpThreadInfo *)ts_queue_deq_data(pTp->busy_q);
             pthread_mutex_lock(&pThi->event_lock);
             pThi->event = TRUE;
 			pthread_cond_signal(&pThi->event_cond);
@@ -178,7 +188,7 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
         }
 
         while (!ts_queue_is_empty(pTp->idle_q)) {
-            pThi = ts_queue_deq_data(pTp->idle_q);
+            pThi = (TpThreadInfo *)ts_queue_deq_data(pTp->idle_q);
             pthread_mutex_lock(&pThi->event_lock);
             pThi->event = TRUE;
 			pthread_cond_signal(&pThi->event_cond);
@@ -198,7 +208,7 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
 	} else {
 		//close work thread
 		while (!ts_queue_is_empty(pTp->busy_q)) {
-            pThi = ts_queue_deq_data(pTp->busy_q);
+            pThi = (TpThreadInfo *)ts_queue_deq_data(pTp->busy_q);
             kill((pid_t)pThi->thread_id, SIGKILL);
 			pthread_mutex_destroy(&pThi->event_lock);
 			pthread_cond_destroy(&pThi->event_cond);
@@ -206,7 +216,7 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
         }
         
         while (!ts_queue_is_empty(pTp->idle_q)) {
-            pThi = ts_queue_deq_data(pTp->idle_q);
+            pThi = (TpThreadInfo *)ts_queue_deq_data(pTp->idle_q);
             kill((pid_t)pThi->thread_id, SIGKILL);
 			pthread_mutex_destroy(&pThi->event_lock);
 			pthread_cond_destroy(&pThi->event_cond);
@@ -323,9 +333,9 @@ static TpThreadInfo *tp_add_thread(TpThreadPool *pTp, process_job proc_fun, void
  * 	true: successful; false: failed
  */
 int tp_delete_thread(TpThreadPool *pTp) {
-	unsigned idx;
-	TpThreadInfo *pThi;
-	TpThreadInfo tT;
+	//unsigned idx;
+	//TpThreadInfo tT;
+    TpThreadInfo *pThi;
 
 	//current thread num can't < min thread num
 	if (ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q) <= pTp->min_th_num)
@@ -336,8 +346,9 @@ int tp_delete_thread(TpThreadPool *pTp) {
 		return -1;
 	
     DEBUG("Delete idle thread 0x%08x\n", (unsigned)pThi->thread_id);
-    //kill the idle thread and free info struct
-    kill((pid_t)pThi->thread_id, SIGKILL);
+    //close the idle thread and free info struct
+    pthread_cancel(pThi->thread_id);
+    pthread_join(pThi->thread_id, NULL);
     pthread_mutex_destroy(&pThi->event_lock);
     pthread_cond_destroy(&pThi->event_cond);
     free(pThi);
@@ -391,6 +402,7 @@ static void *tp_work_thread(void *arg) {
 		}
 	}
     DEBUG("thread 0x%08x exit\n", (unsigned)pTinfo->thread_id);
+    return NULL;
 }
 
 /**
@@ -409,7 +421,7 @@ int tp_get_tp_status(TpThreadPool *pTp) {
     total_num = ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q);
     busy_num = busy_num / total_num;
 
-	DEBUG("Thread pool status, total num: %u, busy num: %u, idle num: %u\n", \
+	DEBUG("Thread pool status, total num: %d, busy num: %d, idle num: %d\n", \
         total_num, (unsigned)busy_num, ts_queue_count(pTp->idle_q));
 	if(busy_num < pTp->busy_threshold)
 		return 0;//idle status
@@ -445,8 +457,12 @@ float tp_get_busy_threshold(TpThreadPool *pTp){
 }
 
 int tp_set_busy_threshold(TpThreadPool *pTp, float bt){
-	if(bt <= 1.0 && bt > 0.)
+	if(bt <= 1.0 && bt > 0.) {
 		pTp->busy_threshold = bt;
+        return 0;
+	}
+
+    return -1;
 }
 
 unsigned tp_get_manage_interval(TpThreadPool *pTp){
@@ -455,4 +471,5 @@ unsigned tp_get_manage_interval(TpThreadPool *pTp){
 
 int tp_set_manage_interval(TpThreadPool *pTp, unsigned mi){
 	pTp->manage_interval = mi;
+    return 0;
 }
