@@ -63,7 +63,7 @@ int test2(void)
 		pool->DoJob(proc_fun, (void*)i);
 	}
 
-    sleep(26);
+    sleep(28);
 	printf("timeout, delete workpool %d\n", exit_cnt);
 	delete pool;
 	fprintf(stderr, "%d jobs done!\n", exit_cnt);

@@ -6,8 +6,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <pthread.h>
-#include <signal.h>
-
+#include <semaphore.h>
 #include "tsqueue.h"
 
 #ifndef BOOL
@@ -37,10 +36,8 @@ typedef void (*process_job)(void *arg);
 //thread info
 struct tp_thread_info_s {
 	pthread_t thread_id; //thread id num
-	BOOL is_busy; //thread status:true-busy;flase-idle
-	BOOL event;
-	pthread_cond_t event_cond;
-	pthread_mutex_t event_lock;
+	BOOL stop_flag; //whether stop the thread
+	sem_t *event_sem;    
 	process_job proc_fun;
 	void *arg;
 	TpThreadPool *tp_pool;
@@ -49,17 +46,11 @@ struct tp_thread_info_s {
 //main thread pool struct
 struct tp_thread_pool_s {
 	unsigned min_th_num; //min thread number in the pool
-	unsigned max_th_num; //max thread number in the pool
-	pthread_mutex_t tp_lock;
-	pthread_cond_t tp_cond;
-	pthread_mutex_t loop_lock;
-	pthread_cond_t loop_cond;
-	
+	unsigned max_th_num; //max thread number in the pool	
     TSQueue *busy_q; //busy queue
 	TSQueue *idle_q; //idle queue
-	BOOL stop_flag; //whether stop the threading pool
-	
-	pthread_t manage_thread_id; //manage thread id num
+
+    TpThreadInfo *manage;
 	float busy_threshold; //
 	unsigned manage_interval; //
 };
