@@ -211,7 +211,7 @@ void tp_close(TpThreadPool *pTp, BOOL wait) {
 int tp_process_job(TpThreadPool *pTp, process_job proc_fun, void *arg) {
 	TpThreadInfo *pThi ;
 
-    if (!pTp) return -1;
+    if (!pTp || !proc_fun) return -1;
     
 	pThi = (TpThreadInfo *) ts_queue_deq_data(pTp->idle_q);
 	if(pThi){

@@ -15,6 +15,9 @@
 
 WorkPool::WorkPool(unsigned min, unsigned max)
 {
+	if (!min) min = WORKPOOL_DEF_MIN;
+    if (!max) min = WORKPOOL_DEF_MAX;
+
     mMinNr = min;
     mMaxNr = max;
     mPool = NULL;
