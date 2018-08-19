@@ -370,20 +370,21 @@ static void *tp_work_thread(void *arg) {
  * 	0: idle; 1: normal or busy(don't process)
  */
 int tp_get_tp_status(TpThreadPool *pTp) {
-	float busy_num = 0.0;
-    unsigned total_num = 0;
-    
-	//get busy thread number
-	busy_num = ts_queue_count(pTp->busy_q);
-    total_num = ts_queue_count(pTp->busy_q)+ts_queue_count(pTp->idle_q);
-    busy_num = busy_num / total_num;
+    float busy_rate = 0.0;
+    unsigned busy_nr, idle_nr;
 
-	DEBUG("Thread pool status, total num: %d, busy num: %d, idle num: %d\n", \
-        total_num, (unsigned)busy_num, ts_queue_count(pTp->idle_q));
-	if(busy_num < pTp->busy_threshold)
-		return 0;//idle status
-	else
-		return 1;//busy or normal status	
+    //get busy thread number
+    busy_nr = ts_queue_count(pTp->busy_q);
+    idle_nr = ts_queue_count(pTp->idle_q);
+    busy_rate = busy_nr;
+    busy_rate = busy_rate / (busy_nr+idle_nr);
+
+    DEBUG("Thread pool status, total num: %d, busy num: %d, idle num: %d\n", \
+          (busy_nr+idle_nr), busy_nr, idle_nr);
+    if (busy_rate < pTp->busy_threshold)
+        return 0;//idle status
+    else
+        return 1;//busy or normal status
 }
 
 /**
